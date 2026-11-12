@@ -1,0 +1,5 @@
+(gdb) break classify
+(gdb) run 27
+(gdb) watch OPAQUE7
+   Old value = 32767
+   New value = 1

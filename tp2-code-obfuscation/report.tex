@@ -1,0 +1,191 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{fancyhdr}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{accent}{HTML}{3A4A7A}
+\definecolor{codebg}{HTML}{F6F7F9}
+\definecolor{codeln}{HTML}{576DA4}
+\definecolor{basebg}{HTML}{EEF6EC}
+\definecolor{baseln}{HTML}{4C9A4C}
+\definecolor{kw}{HTML}{0B5FA5}
+\definecolor{cmt}{HTML}{6A8759}
+
+\usepackage{titlesec}
+\titleformat{\section}{\large\bfseries\color{accent}}{\thesection}{0.6em}{}
+\setlength{\parindent}{0pt}\setlength{\parskip}{4pt}
+
+\pagestyle{fancy}\fancyhf{}
+\lhead{\small Code Obfuscation --- Tigress}
+\rhead{\small DANG Nhat Minh}
+\cfoot{\small\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\lstdefinestyle{c}{language=C, backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\footnotesize, keywordstyle=\color{kw}\bfseries,
+  commentstyle=\color{cmt}\itshape, numbers=none, breaklines=true,
+  frame=leftline, rulecolor=\color{codeln}, framesep=5pt, xleftmargin=6pt,
+  showstringspaces=false, columns=fullflexible, keepspaces=true,
+  literate={->}{{$\rightarrow$}}1 {<=}{{$\leq$}}1 {!=}{{$\neq$}}1}
+\lstdefinestyle{base}{style=c, backgroundcolor=\color{basebg}, rulecolor=\color{baseln}}
+% plain terminal/gdb output (no code coloring)
+\lstdefinestyle{out}{backgroundcolor=\color{codebg}, basicstyle=\ttfamily\footnotesize,
+  frame=leftline, rulecolor=\color{codeln}, framesep=5pt, xleftmargin=6pt,
+  breaklines=true, columns=fullflexible, keepspaces=true}
+\lstset{style=c}
+\newcommand{\code}[1]{\texttt{\small #1}}
+
+\begin{document}
+
+% ---------------- TITLE PAGE ----------------
+\thispagestyle{empty}
+\vspace*{\fill}
+\begin{center}
+  {\Huge\bfseries Code Obfuscation with Tigress}\\[20pt]
+  \rule{0.55\textwidth}{0.4pt}\\[16pt]
+  {\large \textit{Advanced Security}}\\[4pt]
+  {\normalsize Master Cybersecurity --- UGA}\\[28pt]
+  {\Large \textbf{DANG Nhat Minh}}\\[10pt]
+  {\small Tool: Tigress 4.2.1}\\[4pt]
+  {\small \today}
+\end{center}
+\vspace*{\fill}
+\newpage
+
+% ---------------- CONTENT ----------------
+I used Tigress to obfuscate two small C programs and then read the generated code to point out
+the main obfuscation technique of each transformation. Every transformation was recompiled and run:
+the output is always the same as the original, so the behaviour is preserved. The general command is
+\code{tigress -{}-Transform=T -{}-Functions=f in.c -{}-out=result.c}.
+
+% ---------------- VIRTUALIZE ----------------
+\section{Virtualize (a virtual machine)}
+\textbf{Original program} \code{simple.c} (returns 42):
+\begin{lstlisting}[style=base]
+int main(){ int x = 42; return x++; }
+\end{lstlisting}
+After \code{-{}-Transform=Virtualize}, the 47-byte file becomes about 44\,KB but still returns 42.
+Tigress replaced the code by a small \textbf{virtual machine}: my program is now stored as
+\textbf{bytecode} (an array of bytes) and executed by an \textbf{interpreter loop (dispatcher)} that
+reads one opcode at a time:
+\begin{lstlisting}
+unsigned char $array[1][53];        // bytecode = my program encoded as bytes
+unsigned char *$pc;                 // virtual program counter (points in $array)
+union _node   *$sp;                 // virtual stack pointer
+while (1) {
+  switch (*($pc[0])) {              // fetch an opcode, then execute it
+    case constant: ... ;            // push a value
+    case store:    ... ;            // write a variable
+    case PlusA:    ($sp-1)->_int = ($sp)->_int + ($sp-1)->_int; $sp--;  // <-- example opcode: ADD
+    case return:   return ($sp)->_int;
+  }
+}
+\end{lstlisting}
+\textbf{Main feature:} the logic is no longer visible as instructions; it is data (bytecode)
+interpreted by a VM. \textbf{Example opcode:} \code{PlusA} is an addition done on the virtual stack.
+
+\textbf{Checking with gdb.} Breaking on the \code{switch} and printing the opcode each iteration
+gives this real output:
+\lstinputlisting[style=out]{snippets/gdb_virt.txt}
+Here \code{0x7e}=\code{constant} (push 42), \code{0x26}=\code{local} (push \&x), \code{0xaf}=\code{store}
+(x=42): exactly the original \code{x=42; return x++;}. The PC moves forward through \code{\$array} and
+the loop runs once per virtual instruction, confirming that \code{main} is now an interpreter. Changing
+\code{-{}-VirtualizeDispatch} (switch / direct / indirect / call) only changes how the next opcode is
+reached (a \code{switch}, a computed \code{goto}, or function pointers); the bytecode stays the same.
+
+% ---------------- FLATTEN + OPAQUE ----------------
+\section{Flatten and Opaque Predicates}
+\textbf{Original program} \code{collatz.c} --- function \code{classify(n)} with a loop and some
+\code{if} (returns 211 for n=27):
+\begin{lstlisting}[style=base]
+int classify(int n){
+  int steps = 0;
+  if (n <= 0) return -1;
+  while (n != 1){ if (n%2==0) n = n/2; else n = 3*n+1; steps++; }
+  if (steps > 10) return steps + 100;
+  return steps;
+}
+\end{lstlisting}
+
+\textbf{Flatten.} The \code{if}/\code{while} structure disappears: every block becomes a \code{case}
+and a variable \code{NEXT} says which block runs next.
+\begin{lstlisting}
+int classify(int n){
+  unsigned long NEXT = 9;
+  while (1){ switch (NEXT){
+    case 9:  steps = 0;            NEXT = 10; break;   // entry
+    case 10: if (n<=0) NEXT=12; else NEXT=3; break;    // if (n<=0)
+    case 7:  if (n%2==0) NEXT=5; else NEXT=1; break;   // if inside the loop
+    case 1:  n = 3*n + 1;         NEXT = 0;  break;
+    case 12: return -1;  /* ... other cases ... */
+  }}
+}
+\end{lstlisting}
+\textbf{Main feature:} the control-flow graph (loop + branches) is turned into a flat state machine,
+so the original structure is hidden. \textbf{Checking with gdb} (a watchpoint on the state variable,
+n=27) shows the blocks being selected one after another --- real output:
+\lstinputlisting[style=out]{snippets/gdb_flat.txt}
+The value goes \code{9 -> 10 -> 3 -> 7 -> 1 -> 0}: the state machine running through the blocks.
+
+\textbf{AddOpaque.} Tigress adds fake branches guarded by an \textbf{opaque predicate} --- a condition
+that is always true but hard to prove statically. It first builds a small data structure at run time,
+then uses it inside a huge always-true condition:
+\begin{lstlisting}
+cond = (int)( ...(p == (node*)((unsigned long)(q ^ K) ^ K))... );  // 11,666 chars, always == 1
+if (cond) { steps = 0; } else { /* dead code */ }
+\end{lstlisting}
+\textbf{Main feature:} real code is wrapped in conditions that always hold, plus dead branches, which
+adds noise and makes the program look much more complex than it is. \textbf{Checking with gdb}, a
+watchpoint on the guard shows it really is constant --- real output:
+\lstinputlisting[style=out]{snippets/gdb_opaque.txt}
+\code{OPAQUE7} becomes \code{1}, so the branch is always taken: it is an opaque (always-true) predicate.
+
+% ---------------- DATA + SELFMOD ----------------
+\section{Data Transformations and Self-Modification}
+\textbf{EncodeArithmetic.} Normal operations are rewritten as equivalent but strange bit operations:
+\begin{center}\small
+\begin{tabular}{@{}ll@{}}
+\toprule \textbf{Original} & \textbf{Obfuscated} \\ \midrule
+\code{n = 3*n + 1} & \code{n = ((3*n | 1) << 1) - (3*n \^{} 1)} \\
+\code{steps + 100} & \code{(steps - \~{}100) - 1} \\ \bottomrule
+\end{tabular}
+\end{center}
+\textbf{Main feature:} the arithmetic is hidden; \code{x+1} no longer looks like an addition.
+
+\textbf{EncodeLiterals.} The constant \code{42} does not appear anymore in the binary; it is
+recomputed at run time, so a simple search for the value fails.
+
+\textbf{SelfModify.} The program \textbf{modifies its own machine code at run time} (same idea as
+Part 1), so what a static tool reads is not what really executes. To let it run, the code section
+must be writable; Tigress ships \code{tigress\_post -{}-Action=writable} for this (otherwise the
+program gets a SIGSEGV because modern systems map \code{.text} read-only --- W\^{}X --- exactly the
+problem Part 1 solved with \code{mprotect}). \textbf{gdb proves the self-modification}: stopping on the
+write instruction and reading the target bytes before and after shows the code change itself:
+\lstinputlisting[style=out]{snippets/gdb_selfmod.txt}
+The instruction at \code{classify+5392} writes into \code{classify+5494} --- both inside \code{.text}
+--- and the 4 bytes there change from \code{f1 7e 05 4d} to \code{34 d8 ff ff} after a single step:
+the function rewrites its own instructions while running.
+
+% ---------------- SUMMARY ----------------
+\section{Summary}
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Transformation} & \textbf{Main feature} & \textbf{Makes reversing harder because} \\ \midrule
+Virtualize       & bytecode + VM interpreter        & you see a VM, not the real code \\
+Flatten          & flat state machine (\code{NEXT})  & the loop/branch structure is gone \\
+AddOpaque        & always-true conditions + dead code & fake complexity, hard to prune \\
+EncodeArithmetic & operations as bit tricks          & data flow is hidden \\
+EncodeLiterals   & constants recomputed              & constants are not in the binary \\
+SelfModify       & code rewrites itself at run time  & static code $\neq$ executed code \\ \bottomrule
+\end{tabular}
+\end{center}
+
+\end{document}

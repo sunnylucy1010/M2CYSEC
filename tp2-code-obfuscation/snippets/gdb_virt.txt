@@ -1,0 +1,5 @@
+(gdb) break at the switch; print PC and opcode each loop:
+iter1  PC=0x555555558060  opcode=0x7e
+iter2  PC=0x555555558065  opcode=0x26
+iter3  PC=0x55555555806a  opcode=0xaf
+iter4  PC=0x55555555806b  opcode=0x26

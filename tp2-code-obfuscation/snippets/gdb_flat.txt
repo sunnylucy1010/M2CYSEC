@@ -1,0 +1,15 @@
+(gdb) break classify
+(gdb) run 27
+(gdb) watch _TIG_FN_Krvf_1_classify_next
+   Old value = 93824992247256
+   New value = 9
+   Old value = 9
+   New value = 10
+   Old value = 10
+   New value = 3
+   Old value = 3
+   New value = 7
+   Old value = 7
+   New value = 1
+   Old value = 1
+   New value = 0

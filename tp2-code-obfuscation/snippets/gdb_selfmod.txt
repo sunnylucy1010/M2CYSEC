@@ -1,0 +1,7 @@
+(gdb) break *(classify+5392)    # stop at the self-modifying write: mov %rdx,(%rax)
+(gdb) run 27
+(gdb) x/4xb $rax                # target bytes BEFORE the write (= real code of classify)
+   <classify+5494>:  0xf1  0x7e  0x05  0x4d
+(gdb) stepi                     # execute the single write instruction
+(gdb) x/4xb $rax                # SAME address AFTER: the code bytes changed
+   <classify+5494>:  0x34  0xd8  0xff  0xff
